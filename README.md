@@ -158,6 +158,37 @@ For context, **60.6% of uniformly random 32-bit words decode as some defined
 instruction** — the 'C3x encoding is dense. So a 100% rate on one word means
 little, but 100% across 72,105 consecutive words does not happen by accident.
 
+### Detecting corrupted words
+
+`info` reports, per boot-table block, how many instructions name a CPU register
+that does not exist. The 'C3x encodes a register in 5 bits, so 28-31 are
+representable but undefined -- the part has 28. Real compiler output never names
+one.
+
+This catches what a decode rate cannot. Decode rate asks *is this a legal
+opcode*, and a corrupted word very often still is. This asks whether the
+operands make sense:
+
+```
+  region   decode rate   bad regs   range
+  block2   100.0%             1   0x00042d00..0x000546a8  72105 words  <- entry
+  block3    96.6%           780   0x00014ca5..0x000190a7  17411 words
+
+WARNING: 1 instruction(s) in the entry block name a register that
+         does not exist.
+           0x051B7A  08FF0434  LDII      0434h, REG31   (dst = reg 31)
+```
+
+That is a real find: a 1996 instrument ROM with 11 drifted bits, in an image
+whose decode rate was 100%. A second copy of the same chip from a sibling unit
+read `LDI *+AR4(52), AR0` at that address, and the surrounding code -- three
+identical five-instruction blocks -- made the correct value unambiguous.
+
+The count is also a serviceable code-versus-data discriminator. A genuine code
+block scores 0; the `.cinit` block above scores 780, because disassembling data
+produces impossible registers constantly. **Only the entry block's count is
+worth acting on**, which is why the warning is scoped to it.
+
 ### A documentation bug this turned up
 
 TI's own manual contradicts itself on the 24-bit branches. The `BR` page gives

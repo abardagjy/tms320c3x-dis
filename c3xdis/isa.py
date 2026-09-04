@@ -25,6 +25,12 @@ REGISTERS = [
 
 DP = 16  # machine address of the data-page pointer, needed for the LDP alias
 
+#: Highest defined CPU register machine address. 0..27 are the registers in
+#: REGISTERS; 28..31 are encodable in a 5-bit field but do not exist on the
+#: part. An instruction naming one is not a legal instruction, which makes it a
+#: useful corruption detector -- see analysis.suspect_registers().
+MAX_REGISTER = len(REGISTERS) - 1
+
 
 def register(n):
     """Register name for a 5-bit machine address; unknown encodings stay numeric."""

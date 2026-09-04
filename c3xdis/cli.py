@@ -43,14 +43,46 @@ def cmd_info(args):
     print(f"decode rate      {analysis.decode_rate(instructions):.1%} "
           f"over {len(instructions)} words")
     print(f"branch targets   {ratio:.1%} land inside the image")
-    if table is not None:
+
+    if table is None:
+        return 0
+
+    # The bad-register check is only meaningful over code. Data disassembles to
+    # nonsense that names impossible registers constantly, so reporting it
+    # image-wide would drown the signal -- restrict it per block, which also
+    # makes the column a decent code-versus-data discriminator.
+    # The LAST block covering the entry address, not the first: a boot table
+    # commonly starts with a one-word dummy block whose only job is to set the
+    # branch target, which a later block then overwrites. Later blocks win, the
+    # same rule BootTable.memory() uses.
+    entry_block = None
+    for n, b in enumerate(table.blocks):
+        if b.dest <= table.entry < b.end:
+            entry_block = n
+    print()
+    print("  region   decode rate   bad regs   range")
+    per_block = {}
+    for n, b in enumerate(table.blocks):
+        addrs = range(b.dest, b.end)
+        rate = analysis.decode_rate(instructions, addrs)
+        bad = list(analysis.suspect_registers(image, addrs))
+        per_block[n] = bad
+        note = "  <- entry" if n == entry_block else ""
+        print(f"  block{n}   {rate:6.1%}      {len(bad):8}   "
+              f"0x{b.dest:08x}..0x{b.end - 1:08x}  {b.size} words{note}")
+
+    bad = per_block.get(entry_block, [])
+    if bad:
         print()
-        print("  region   decode rate")
-        for n, b in enumerate(table.blocks):
-            addrs = range(b.dest, b.end)
-            rate = analysis.decode_rate(instructions, addrs)
-            print(f"  block{n}   {rate:6.1%}   0x{b.dest:08x}..0x{b.end - 1:08x}"
-                  f"   {b.size} words")
+        print(f"WARNING: {len(bad)} instruction(s) in the entry block name a "
+              "register that")
+        print("         does not exist. Real compiler output never does this, so "
+              "these are")
+        print("         very likely corrupted words -- a failing ROM or a "
+              "marginal read.")
+        for addr, word, field, reg in bad[:10]:
+            print(f"           0x{addr:06X}  {word:08X}  {decode(word, addr)}"
+                  f"   ({field} = reg {reg})")
     return 0
 
 

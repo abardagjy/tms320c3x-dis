@@ -67,6 +67,36 @@ def decode_rate(instructions, addresses=None):
     return (valid / total) if total else 0.0
 
 
+def suspect_registers(image, addresses=None):
+    """
+    Find instructions naming a CPU register that does not exist.
+
+    The 'C3x encodes register operands in 5 bits, so 28..31 are representable
+    but undefined -- the part has 28 registers. Real compiler output never names
+    one. A hit is therefore strong evidence of a corrupted word rather than an
+    unusual instruction.
+
+    This catches what a decode-rate check cannot. Decode rate asks "is this a
+    legal opcode", and a corrupted word very often still is; this asks whether
+    the operands make sense. It found a genuine bit-rot defect in a 1996
+    instrument ROM that a 100% decode rate had passed over.
+
+    Yields (address, word, field_name, register_number).
+    """
+    for addr in (addresses if addresses is not None else image.addresses):
+        w = image[addr]
+        top3, top4 = w >> 29, w >> 28
+        fields = []
+        if top3 in (0b000, 0b001) or top4 in (0b0100, 0b0101):
+            fields.append(("dst", (w >> 16) & 0x1F))
+        if top3 == 0b000 and ((w >> 21) & 0x03) == 0b00:
+            fields.append(("src", w & 0x1F))
+        for name, reg in fields:
+            if reg > isa.MAX_REGISTER:
+                yield addr, w, name, reg
+                break
+
+
 def xrefs(instructions, image):
     """
     Build cross-references from statically resolvable branch and call targets.
