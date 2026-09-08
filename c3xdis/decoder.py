@@ -206,9 +206,25 @@ def _decode_cond_branch(word, addr, mnemonic_base, kind, arn_field=False):
 
     if b:
         disp = _sign16(word & 0xFFFF)
-        # The displacement is relative to the incremented PC; a delayed branch
-        # resolves three words later still.
-        target = addr + 1 + disp + (isa.DELAY_SLOTS if delayed else 0)
+        # Standard branch: the displacement is relative to the incremented PC,
+        # so target = addr + 1 + disp.
+        #
+        # DELAYED branch: the three delay slots issue before the branch takes
+        # effect, and the displacement is relative to the PC *after* them, so
+        # target = addr + 3 + disp -- NOT addr + 1 + disp + 3. Getting this
+        # wrong lands every delayed branch one word past its real target.
+        #
+        # Confirmed against a TMS320C31 boot ROM (HP 86125A K11 firmware):
+        #   042D19  RPTS R1        arms the repeat
+        #   042D1A  LDI||STI       the copied word
+        #   042D1C  BNED disp -6   must return to 042D19 to RE-ARM the repeat;
+        #                          042D1C + 3 - 6 = 042D19. Targeting 042D1A
+        #                          would copy one word per block and the boot
+        #                          loader could not work.
+        #   042D13  BEQ  disp +12  -> 042D20   (non-delayed)
+        #   042D15  BEQD disp  +8  -> 042D20   both are the same "table
+        #                          exhausted" exit and must converge.
+        target = addr + disp + (3 if delayed else 1)
         return Instruction(addr, word, mnemonic, prefix + [f"{target:06X}h"],
                            kind=kind, target=target, delayed=delayed)
 

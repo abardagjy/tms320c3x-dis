@@ -203,12 +203,42 @@ def test_conditional_branch_negative_displacement():
     assert ins.target == 0x2000 + 1 - 4
 
 
-def test_delayed_conditional_branch_skips_the_delay_slots():
+def test_delayed_conditional_branch_is_relative_to_the_pc_after_the_slots():
+    # A delayed branch's displacement is relative to the PC *after* the three
+    # delay slots, so target = addr + 3 + disp -- not addr + 1 + disp + 3.
+    # This test previously asserted the latter, which put every delayed branch
+    # one word past its real target. See the ROM-derived regression below.
     word = (0b011010 << 26) | (1 << 25) | (1 << 21) | (0b00101 << 16) | 0
     ins = decode(word, addr=0x100)
     assert ins.mnemonic == "BEQD"
     assert ins.delayed
-    assert ins.target == 0x100 + 1 + isa.DELAY_SLOTS
+    assert ins.target == 0x100 + 3
+
+
+def test_delayed_branch_targets_against_a_real_boot_rom():
+    """
+    Regression from a TMS320C31 boot ROM (HP 86125A K11 firmware), whose
+    .cinit copy loop pins the delayed-branch rule functionally:
+
+        042D19  RPTS R1        arms the block repeat
+        042D1A  LDI||STI       the copied word
+        042D1C  BNED disp -6   must return to 042D19 to RE-ARM the repeat
+
+    Targeting 042D1A instead would copy exactly one word per block and the
+    boot loader could not work, so 042D1C + 3 - 6 = 042D19 is forced.
+
+    The two exits from the same loop corroborate it: a non-delayed BEQ at
+    042D13 (disp +12) and a delayed BEQD at 042D15 (disp +8) are both the
+    "block table exhausted" branch and must converge -- 042D13 + 1 + 12 and
+    042D15 + 3 + 8 both give 042D20.
+    """
+    bned = (0b011010 << 26) | (1 << 25) | (1 << 21) | (0b00110 << 16) | 0xFFFA
+    assert decode(bned, addr=0x042D1C).target == 0x042D19
+
+    beq = (0b011010 << 26) | (1 << 25) | (0b00101 << 16) | 0x000C
+    beqd = (0b011010 << 26) | (1 << 25) | (1 << 21) | (0b00101 << 16) | 0x0008
+    assert decode(beq, addr=0x042D13).target == 0x042D20
+    assert decode(beqd, addr=0x042D15).target == 0x042D20
 
 
 def test_unconditional_condition_code_renders_without_suffix():
