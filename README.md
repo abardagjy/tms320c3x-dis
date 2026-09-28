@@ -125,6 +125,18 @@ block that a later block overwrites.
 `c3xdis info` parses this and loads each block at its destination address, so
 disassembly comes out at the addresses the code actually runs at.
 
+## RAM after `.cinit`
+
+TI's C compiler puts every initialised variable's value in a `.cinit` segment that the startup code copies into RAM before `main`, so a disassembly alone cannot say what `LDI @2388h, R1` loads: the operand is an offset into the current data page and the value arrives at boot. `cinit` walks the segment and answers:
+
+```
+c3xdis cinit U2.bin U11.bin --at 0x2388 0x249A      # bare 16-bit values are @XXXXh on --dp (default 1)
+c3xdis cinit U2.bin U11.bin --range 0x12303 0x12310
+c3xdis cinit U2.bin U11.bin --find 0x10000000
+```
+
+The segment is found by validation: each boot-loaded block is walked as `[size][dest][data]` records and the one that consumes nearly all of itself is `.cinit`; a code block fails on its first word. `--start` overrides it. A cell that comes back uninitialised is `.bss`, written at runtime, and not in the ROM.
+
 ## Correctness
 
 Every encoding table is transcribed from the TMS320C3x/C33 User's Guide

@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from . import __version__, analysis, boot, isa
+from . import __version__, analysis, boot, cinit, isa
 from .decoder import decode
 
 
@@ -138,6 +138,50 @@ def cmd_strings(args):
     return 0
 
 
+def cmd_cinit(args):
+    words, table = boot.load(args.files, big_endian=args.big_endian)
+    if table is None:
+        print("no boot table: .cinit lives inside a boot-loaded block", file=sys.stderr)
+        return 1
+    try:
+        if args.start is not None:
+            ram, records = cinit.load_ram(table, args.start, args.end)
+        else:
+            found = cinit.find_cinit(table)
+            if found is None:
+                print("no block parses as .cinit; pass --start", file=sys.stderr)
+                return 1
+            ram, records, block = found
+            print(f"# .cinit in block at 0x{block.dest:08x} ({block.size} words)", file=sys.stderr)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"# {records} .cinit records -> {len(ram)} initialised cells", file=sys.stderr)
+
+    def show(addr):
+        v = ram.get(addr)
+        return "<uninit: .bss, written at runtime>" if v is None else f"0x{v:08x}  ({v})"
+
+    if args.at:
+        for a in args.at:
+            # a bare 16-bit value is a @XXXXh direct operand on data page --dp
+            full = a if a > 0xFFFF else (args.dp << 16) | a
+            print(f"@{full & 0xFFFF:04x}h  0x{full:06x} = {show(full)}")
+    if args.range:
+        lo, hi = args.range
+        for a in range(lo, hi + 1):
+            v = ram.get(a)
+            print(f"0x{a:06x} = " + ("----" if v is None else f"0x{v:08x}"))
+    if args.find is not None:
+        for a, v in sorted(ram.items()):
+            if v == args.find:
+                print(f"0x{a:06x} = 0x{v:08x}")
+    if not (args.at or args.range or args.find is not None):
+        for a, v in sorted(ram.items()):
+            print(f"0x{a:06x} = 0x{v:08x}")
+    return 0
+
+
 def cmd_word(args):
     """Decode instruction words given on the command line -- handy for testing."""
     for value in args.words:
@@ -185,6 +229,18 @@ def main(argv=None):
                        help="find strings stored one character per 32-bit word")
     s.add_argument("--minlen", type=int, default=4)
     s.set_defaults(fn=cmd_strings)
+
+    s = sub.add_parser("cinit", parents=[common],
+                       help="RAM as the C runtime's .cinit copy leaves it")
+    s.add_argument("--dp", type=_auto_int, default=1,
+                   help="data page for bare @XXXXh operands given to --at (default 1)")
+    s.add_argument("--start", type=_auto_int, help="the .cinit segment's address, if validation cannot find it")
+    s.add_argument("--end", type=_auto_int, help="with --start: the last address to walk")
+    s.add_argument("--at", type=_auto_int, nargs="+", metavar="ADDR",
+                   help="cells to look up; a 16-bit value is a @XXXXh operand on --dp")
+    s.add_argument("--range", type=_auto_int, nargs=2, metavar=("LO", "HI"), help="dump a range")
+    s.add_argument("--find", type=_auto_int, metavar="VALUE", help="every cell holding a value")
+    s.set_defaults(func=cmd_cinit)
 
     s = sub.add_parser("word", help="decode literal instruction words")
     s.add_argument("words", nargs="+", type=_auto_int)
