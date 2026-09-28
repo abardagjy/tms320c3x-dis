@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from . import __version__, analysis, boot, cinit, isa
+from . import __version__, analysis, boot, cinit, isa, tifloat
 from .decoder import decode
 
 
@@ -182,6 +182,54 @@ def cmd_cinit(args):
     return 0
 
 
+def _load_cinit_ram(args):
+    """The .cinit-initialised RAM of the lane files, the way cmd_cinit finds it:
+    by validation, or from --start/--end. Returns (ram, records) or raises."""
+    words, table = boot.load(args.files, big_endian=args.big_endian)
+    if table is None:
+        raise ValueError("no boot table: .cinit lives inside a boot-loaded block")
+    if args.start is not None:
+        return cinit.load_ram(table, args.start, args.end)
+    found = cinit.find_cinit(table)
+    if found is None:
+        raise ValueError("no block parses as .cinit; pass --start")
+    ram, records, block = found
+    print(f"# .cinit in block at 0x{block.dest:08x} ({block.size} words)", file=sys.stderr)
+    return ram, records
+
+
+def cmd_float(args):
+    """TI single-precision floats: decode literal words, or search .cinit."""
+    if args.find is None and not args.all:
+        # literal words: hex with or without 0x, the way one reads them off a dump
+        for text in args.items:
+            word = int(text, 16)
+            e, s, f = tifloat.fields32(word)
+            print(f"{word:08X}  {tifloat.decode32(word)!r:<24} e={e:<5} s={s}  f=0x{f:06x}")
+        return 0
+
+    args.files = args.items
+    ram, records = _load_cinit_ram(args)
+    print(f"# {records} .cinit records -> {len(ram)} initialised cells", file=sys.stderr)
+    hits = 0
+    for addr, word in sorted(ram.items()):
+        value = tifloat.decode32(word)
+        if args.find is not None:
+            for want in args.find:
+                # relative tolerance; zero can only be hit exactly
+                if abs(value - want) <= args.tol * abs(want):
+                    print(f"0x{addr:06x}  {word:08x}  {value!r}  ~ {want!r}")
+                    hits += 1
+                    break
+        elif tifloat.plausible(value, word, args.integers):
+            print(f"0x{addr:06x}  {word:08x}  {value!r}")
+            hits += 1
+    if args.find is not None and not hits:
+        print("no cell decodes to a value that close", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_word(args):
     """Decode instruction words given on the command line -- handy for testing."""
     for value in args.words:
@@ -240,7 +288,24 @@ def main(argv=None):
                    help="cells to look up; a 16-bit value is a @XXXXh operand on --dp")
     s.add_argument("--range", type=_auto_int, nargs=2, metavar=("LO", "HI"), help="dump a range")
     s.add_argument("--find", type=_auto_int, metavar="VALUE", help="every cell holding a value")
-    s.set_defaults(func=cmd_cinit)
+    s.set_defaults(fn=cmd_cinit)
+
+    s = sub.add_parser("float", help="TI single-precision floats: decode words, or search .cinit")
+    s.add_argument("items", nargs="+", metavar="WORD|LANE",
+                   help="hex words to decode; with --find or --all, the LANE files instead")
+    s.add_argument("--find", type=float, nargs="+", metavar="VALUE",
+                   help="every .cinit cell that decodes to within --tol of a VALUE")
+    s.add_argument("--tol", type=float, default=2e-6,
+                   help="relative tolerance for --find (default 2e-6, about 2**-19)")
+    s.add_argument("--all", action="store_true",
+                   help="every .cinit cell that decodes to a plausible float, for grepping")
+    s.add_argument("--integers", action="store_true",
+                   help="with --all: keep cells that look like integers, decoded or raw")
+    s.add_argument("--big-endian", action="store_true",
+                   help="assemble words big-endian (default little)")
+    s.add_argument("--start", type=_auto_int, help="the .cinit segment's address, if validation cannot find it")
+    s.add_argument("--end", type=_auto_int, help="with --start: the last address to walk")
+    s.set_defaults(fn=cmd_float)
 
     s = sub.add_parser("word", help="decode literal instruction words")
     s.add_argument("words", nargs="+", type=_auto_int)

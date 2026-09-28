@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "c3xdis"
-version = "0.1.0"
+version = "0.1.1"
 description = "Disassembler for the Texas Instruments TMS320C3x DSP family"
 readme = "README.md"
 requires-python = ">=3.8"

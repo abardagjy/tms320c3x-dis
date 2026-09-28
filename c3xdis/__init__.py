@@ -10,7 +10,7 @@ All encoding tables are transcribed from the TMS320C3x/C33 User's Guide
 (Texas Instruments, SPRU031F).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .decoder import Instruction, decode          # noqa: F401
 from .boot import BootTable, interleave, to_words  # noqa: F401

@@ -54,6 +54,8 @@ first word is a memory width, and it will not read as 8, 16 or 32.
 c3xdis info    LANE...     boot table summary plus decode-rate validation
 c3xdis dis     LANE...     disassemble
 c3xdis strings LANE...     find strings stored one character per 32-bit word
+c3xdis cinit   LANE...     RAM as the C runtime's .cinit copy leaves it
+c3xdis float   LANE...     TI single-precision floats: search .cinit, or decode words
 c3xdis word    0x08200869  decode literal instruction words
 ```
 
@@ -136,6 +138,43 @@ c3xdis cinit U2.bin U11.bin --find 0x10000000
 ```
 
 The segment is found by validation: each boot-loaded block is walked as `[size][dest][data]` records and the one that consumes nearly all of itself is `.cinit`; a code block fails on its first word. `--start` overrides it. A cell that comes back uninitialised is `.bss`, written at runtime, and not in the ROM.
+
+## Floating point
+
+The 'C3x is a floating-point DSP and its formats are **not IEEE 754**. The exponent is an unbiased two's-complement integer in the top bits, the sign bit sits below it, and a negative mantissa is two's complement rather than sign-magnitude. There are no NaNs, infinities or denormals, and zero is not the all-clear word but the most negative exponent: every word with that exponent reads as zero whatever its other bits say. Feed a 'C3x word to `struct.unpack("f")` and you get a wrong number of about the right magnitude, which is the worst kind of wrong.
+
+```
+single, 32 bits     e:8 (31..24)   s (23)   f:23 (22..0)
+short immediate     e:4 (15..12)   s (11)   f:11 (10..0)     the operand of LDF 0400h
+extended, 40 bits   e:8 (39..32)   s (31)   f:31 (30..0)     what R0-R7 hold
+
+value = (1 + f/2^23) * 2^e      s = 0
+      = (-2 + f/2^23) * 2^e     s = 1
+      = 0                       e = -128 (single, extended), e = -8 (short)
+
+0x00000000   1.0                0x7F7FFFFF   most positive   (2 - 2^-23) * 2^127
+0x80000000   0.0                0x81000000   least positive  2^-127
+0xFF800000  -1.0                0x81FFFFFF   least negative  -(1 + 2^-23) * 2^-127
+0x00800000  -2.0                0x7F800000   most negative   -2^128
+```
+
+So the all-zero word is one, and -1.0 is "-2 times 2^-1", not the word with just the sign bit set (that is -2.0). `c3xdis.tifloat` has `decode32`, `decode16`, `decode40` and `encode32` (round to nearest), and the `float` subcommand reads words or searches `.cinit` for a value:
+
+```
+$ c3xdis float 1C0EF3C2 00C00000
+1C0EF3C2  299792448.0              e=28    s=0  f=0x0ef3c2
+00C00000  -1.5                     e=0     s=1  f=0x400000
+
+$ c3xdis float U2.bin U11.bin --find 2.99792458e8 1e-9
+0x01087a  1c0ef3c2  299792448.0  ~ 299792458.0
+0x014ba7  e209705f  9.999999717180685e-10  ~ 1e-09
+
+$ c3xdis float U2.bin U11.bin --all | grep -i 'e-0[6-9]'
+```
+
+That first hit is a real one: the speed of light rounded to a 24-bit mantissa, found in a 1996 HP instrument ROM's `.cinit`, and the check that the formula was right before the manual was opened. `--find` takes a relative tolerance, `--tol`, default 2e-6, because the value you type has more digits than the ROM kept. Lane files go before `--find`, as the other subcommands are written.
+
+`--all` prints every cell that decodes to a plausible constant: magnitude between 1e-12 and 1e12, not an exact integer below 2^24, and not a raw word that is itself a small integer or a 'C3x address (signed magnitude below 2^20), because those decode to 1.000x and 1.01x and would be most of the output. On that ROM the last rule takes the list from 8,315 lines to 161 out of 14,600 cells. It costs the constants in [1.0, 1.125) and (-0.5000006, -0.5]; `--integers` turns both integer rules off.
 
 ## Correctness
 
